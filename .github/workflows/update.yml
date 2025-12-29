@@ -1,0 +1,73 @@
+name: Update Unsigned Casks
+on:
+  schedule:
+    - cron: '0 8 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  update-casks:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout Tap
+        uses: actions/checkout@v4
+
+      - name: Set up Homebrew
+        run: brew update
+
+      - name: Check and Update Casks
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Define your apps here
+          CASKS=("librewolf" "inkscape")
+          
+          git config user.name "Cask Bot"
+          git config user.email "bot@noreply.github.com"
+          
+          for CASK_NAME in "${CASKS[@]}"; do
+            CASK_FILE="Casks/$CASK_NAME.rb"
+            echo "Processing $CASK_NAME..."
+
+            # 1. Get Latest Version via Livecheck (uses the local file strategy)
+            LATEST_VERSION=$(brew livecheck --cask --quiet --newer-only "$CASK_FILE" | awk '{print $2}')
+
+            # If version is empty, no update needed
+            if [ -z "$LATEST_VERSION" ]; then
+              echo "  - Up to date."
+              continue
+            fi
+            
+            echo "  - Found new version: $LATEST_VERSION"
+
+            # 2. Update Version in File
+            sed -i '' "s/version \".*\"/version \"$LATEST_VERSION\"/" "$CASK_FILE"
+            
+            # Reset SHA to :no_check temporarily to allow fetch to proceed if we were using a checksum
+            # (Optional but safe practice)
+            sed -i '' "s/sha256 \".*\"/sha256 :no_check/" "$CASK_FILE"
+
+            # 3. Fetch and Hash
+            # This follows the redirect URL in inkscape.rb and calculates the hash of the ACTUAL file
+            NEW_SHA=$(brew fetch --cask --force "$CASK_FILE" | grep "SHA256:" | awk '{print $2}')
+
+            if [ -z "$NEW_SHA" ]; then
+              echo "  - Failed to fetch. Reverting."
+              git checkout "$CASK_FILE"
+              continue
+            fi
+
+            echo "  - New SHA: $NEW_SHA"
+
+            # 4. Write SHA and Commit
+            sed -i '' "s/sha256 :no_check/sha256 \"$NEW_SHA\"/" "$CASK_FILE"
+            sed -i '' "s/sha256 \".*\"/sha256 \"$NEW_SHA\"/" "$CASK_FILE"
+
+            git add "$CASK_FILE"
+            git commit -m "Update $CASK_NAME to $LATEST_VERSION"
+          done
+
+          git push
+
