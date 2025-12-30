@@ -35,28 +35,20 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # ---------------------------------------------------------
-          # CONFIGURATION
-          # ---------------------------------------------------------
           CASKS=("librewolf" "inkscape")
-          TAP_PREFIX="${GITHUB_REPOSITORY}" # e.g. "yourname/homebrew-unsigned"
+          TAP_PREFIX="${GITHUB_REPOSITORY}"
 
           git config user.name "Cask Bot"
           git config user.email "bot@noreply.github.com"
 
-          # ---------------------------------------------------------
-          # MAIN LOOP
-          # ---------------------------------------------------------
           for CASK_NAME in "${CASKS[@]}"; do
             echo "---------------------------------------------------"
             echo "Processing: $CASK_NAME"
             
-            # Variables
-            FULL_CASK_REF="${TAP_PREFIX}/${CASK_NAME}" # format: user/repo/cask
-            LOCAL_FILE="Casks/${CASK_NAME}.rb"         # format: Casks/cask.rb
+            FULL_CASK_REF="${TAP_PREFIX}/${CASK_NAME}"
+            LOCAL_FILE="Casks/${CASK_NAME}.rb"
             
             # 1. Check for Updates
-            # We use the full tap reference (user/repo/cask) so brew looks in the symlinked folder
             LATEST_VERSION=$(brew livecheck --cask --quiet --newer-only "$FULL_CASK_REF" | awk '{print $2}')
 
             if [ -z "$LATEST_VERSION" ]; then
@@ -66,31 +58,36 @@ jobs:
             
             echo "  -> Found new version: $LATEST_VERSION"
 
-            # 2. Update Version in Local File
-            # Since we are symlinked, this edit is immediately visible to 'brew fetch' below
+            # 2. Update Version in File
             sed -i '' "s/version \".*\"/version \"$LATEST_VERSION\"/" "$LOCAL_FILE"
-            
-            # Reset SHA to :no_check to allow the fetch to proceed without hash mismatch error
             sed -i '' "s/sha256 \".*\"/sha256 :no_check/" "$LOCAL_FILE"
 
-            # 3. Fetch and Calculate SHA
-            # We force fetch the Cask by its full name. It reads the file we just edited.
+            # 3. Fetch and Calculate SHA (ROBUST METHOD)
             echo "  -> Fetching artifact..."
-            NEW_SHA=$(brew fetch --cask --force "$FULL_CASK_REF" | grep "SHA256:" | awk '{print $2}')
+            
+            # We fetch the file, but ask brew specifically for the location (path) of the downloaded file
+            # This avoids parsing the human-readable text output for the hash
+            DOWNLOAD_PATH=$(brew fetch --cask --force "$FULL_CASK_REF" | grep "Downloaded to:" | awk '{print $3}')
+            
+            # Fallback: if 'Downloaded to:' isn't found, try to find the cached file manually
+            if [ -z "$DOWNLOAD_PATH" ]; then
+               # If grep failed, try getting the path via `brew --cache`
+               DOWNLOAD_PATH=$(brew --cache --cask "$FULL_CASK_REF")
+            fi
 
-            if [ -z "$NEW_SHA" ]; then
-              echo "  -> ❌ Fetch failed. Reverting changes."
+            if [ ! -f "$DOWNLOAD_PATH" ]; then
+              echo "  -> ❌ Fetch failed (File not found at $DOWNLOAD_PATH). Reverting."
               git checkout "$LOCAL_FILE"
               continue
             fi
 
+            # Calculate SHA manually from the file on disk
+            NEW_SHA=$(shasum -a 256 "$DOWNLOAD_PATH" | awk '{print $1}')
             echo "  -> Calculated SHA: $NEW_SHA"
 
             # 4. Finalize File
-            # Replace the temporary :no_check with the actual new SHA
             sed -i '' "s/sha256 :no_check/sha256 \"$NEW_SHA\"/" "$LOCAL_FILE"
-            
-            # Just in case the file had an old SHA instead of :no_check (safety net)
+            # Redundant check for safety
             sed -i '' "s/sha256 \".*\"/sha256 \"$NEW_SHA\"/" "$LOCAL_FILE"
 
             # 5. Commit
@@ -99,10 +96,10 @@ jobs:
           done
 
           # ---------------------------------------------------------
-          # PUSH CHANGES
+          # PUSH CHANGES (Fixed Logic)
           # ---------------------------------------------------------
-          # Only push if there are commits to push
-          if git log origin/HEAD..HEAD | grep -q .; then
+          # Check if we are ahead of remote by looking for unpushed commits
+          if [ -n "$(git cherry -v)" ]; then
             echo "Pushing changes..."
             git push
           else
