@@ -62,37 +62,35 @@ jobs:
             sed -i '' "s/version \".*\"/version \"$LATEST_VERSION\"/" "$LOCAL_FILE"
             sed -i '' "s/sha256 \".*\"/sha256 :no_check/" "$LOCAL_FILE"
 
-            # 3. Fetch and Calculate SHA (ROBUST METHOD)
+            # 3. Fetch and Calculate SHA
             echo "  -> Fetching artifact..."
-            
-            # We fetch the file, but ask brew specifically for the location (path) of the downloaded file
-            # This avoids parsing the human-readable text output for the hash
             DOWNLOAD_PATH=$(brew fetch --cask --force "$FULL_CASK_REF" | grep "Downloaded to:" | awk '{print $3}')
             
-            # Fallback: if 'Downloaded to:' isn't found, try to find the cached file manually
+            # Fallback path finding
             if [ -z "$DOWNLOAD_PATH" ]; then
-               # If grep failed, try getting the path via `brew --cache`
                DOWNLOAD_PATH=$(brew --cache --cask "$FULL_CASK_REF")
             fi
 
             if [ ! -f "$DOWNLOAD_PATH" ]; then
-              echo "  -> ❌ Fetch failed (File not found at $DOWNLOAD_PATH). Reverting."
+              echo "  -> ❌ Fetch failed. Reverting."
               git checkout "$LOCAL_FILE"
               continue
             fi
 
-            # Calculate SHA manually from the file on disk
             NEW_SHA=$(shasum -a 256 "$DOWNLOAD_PATH" | awk '{print $1}')
             echo "  -> Calculated SHA: $NEW_SHA"
 
             # 4. Finalize File
             sed -i '' "s/sha256 :no_check/sha256 \"$NEW_SHA\"/" "$LOCAL_FILE"
-            # Redundant check for safety
             sed -i '' "s/sha256 \".*\"/sha256 \"$NEW_SHA\"/" "$LOCAL_FILE"
 
-            # 5. Commit
-            git add "$LOCAL_FILE"
-            git commit -m "Update $CASK_NAME to $LATEST_VERSION"
+            # 5. Commit (Conditional)
+            if git diff --quiet "$LOCAL_FILE"; then
+                echo "  -> No changes to commit for $CASK_NAME."
+            else
+                git add "$LOCAL_FILE"
+                git commit -m "Update $CASK_NAME to $LATEST_VERSION"
+            fi
           done
 
           # ---------------------------------------------------------
