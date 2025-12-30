@@ -1,7 +1,7 @@
 name: Update Unsigned Casks
 on:
   schedule:
-    - cron: '0 8 * * *'
+    - cron: "27 8 * * *" # Daily at 08:27 UTC
   workflow_dispatch:
 
 permissions:
@@ -11,63 +11,100 @@ jobs:
   update-casks:
     runs-on: macos-latest
     steps:
-      - name: Checkout Tap
+      - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Set up Homebrew
-        run: brew update
+      - name: Configure Homebrew Tap
+        run: |
+          # 1. Update Homebrew Core
+          brew update
+
+          # 2. Symlink this repo into Homebrew's internal Tap structure
+          # This tricks Homebrew into accepting our local files as a valid "Installed Tap"
+          TAP_NAME="${GITHUB_REPOSITORY}" # e.g. "yourname/homebrew-unsigned"
+          TAP_DIR="$(brew --repo)/Library/Taps/$TAP_NAME"
+
+          mkdir -p "$(dirname "$TAP_DIR")"
+          # We symlink the current GitHub Action workspace ($PWD) to the Homebrew tap directory
+          ln -s "$PWD" "$TAP_DIR"
+
+          echo "Symlinked $PWD to $TAP_DIR"
+          brew tap-info "$TAP_NAME"
 
       - name: Check and Update Casks
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Define your apps here
+          # ---------------------------------------------------------
+          # CONFIGURATION
+          # ---------------------------------------------------------
           CASKS=("librewolf" "inkscape")
-          
+          TAP_PREFIX="${GITHUB_REPOSITORY}" # e.g. "yourname/homebrew-unsigned"
+
           git config user.name "Cask Bot"
           git config user.email "bot@noreply.github.com"
-          
+
+          # ---------------------------------------------------------
+          # MAIN LOOP
+          # ---------------------------------------------------------
           for CASK_NAME in "${CASKS[@]}"; do
-            CASK_FILE="Casks/$CASK_NAME.rb"
-            echo "Processing $CASK_NAME..."
+            echo "---------------------------------------------------"
+            echo "Processing: $CASK_NAME"
+            
+            # Variables
+            FULL_CASK_REF="${TAP_PREFIX}/${CASK_NAME}" # format: user/repo/cask
+            LOCAL_FILE="Casks/${CASK_NAME}.rb"         # format: Casks/cask.rb
+            
+            # 1. Check for Updates
+            # We use the full tap reference (user/repo/cask) so brew looks in the symlinked folder
+            LATEST_VERSION=$(brew livecheck --cask --quiet --newer-only "$FULL_CASK_REF" | awk '{print $2}')
 
-            # 1. Get Latest Version via Livecheck (uses the local file strategy)
-            LATEST_VERSION=$(brew livecheck --cask --quiet --newer-only "$CASK_FILE" | awk '{print $2}')
-
-            # If version is empty, no update needed
             if [ -z "$LATEST_VERSION" ]; then
-              echo "  - Up to date."
+              echo "  -> Up to date."
               continue
             fi
             
-            echo "  - Found new version: $LATEST_VERSION"
+            echo "  -> Found new version: $LATEST_VERSION"
 
-            # 2. Update Version in File
-            sed -i '' "s/version \".*\"/version \"$LATEST_VERSION\"/" "$CASK_FILE"
+            # 2. Update Version in Local File
+            # Since we are symlinked, this edit is immediately visible to 'brew fetch' below
+            sed -i '' "s/version \".*\"/version \"$LATEST_VERSION\"/" "$LOCAL_FILE"
             
-            # Reset SHA to :no_check temporarily to allow fetch to proceed if we were using a checksum
-            # (Optional but safe practice)
-            sed -i '' "s/sha256 \".*\"/sha256 :no_check/" "$CASK_FILE"
+            # Reset SHA to :no_check to allow the fetch to proceed without hash mismatch error
+            sed -i '' "s/sha256 \".*\"/sha256 :no_check/" "$LOCAL_FILE"
 
-            # 3. Fetch and Hash
-            # This follows the redirect URL in inkscape.rb and calculates the hash of the ACTUAL file
-            NEW_SHA=$(brew fetch --cask --force "$CASK_FILE" | grep "SHA256:" | awk '{print $2}')
+            # 3. Fetch and Calculate SHA
+            # We force fetch the Cask by its full name. It reads the file we just edited.
+            echo "  -> Fetching artifact..."
+            NEW_SHA=$(brew fetch --cask --force "$FULL_CASK_REF" | grep "SHA256:" | awk '{print $2}')
 
             if [ -z "$NEW_SHA" ]; then
-              echo "  - Failed to fetch. Reverting."
-              git checkout "$CASK_FILE"
+              echo "  -> ❌ Fetch failed. Reverting changes."
+              git checkout "$LOCAL_FILE"
               continue
             fi
 
-            echo "  - New SHA: $NEW_SHA"
+            echo "  -> Calculated SHA: $NEW_SHA"
 
-            # 4. Write SHA and Commit
-            sed -i '' "s/sha256 :no_check/sha256 \"$NEW_SHA\"/" "$CASK_FILE"
-            sed -i '' "s/sha256 \".*\"/sha256 \"$NEW_SHA\"/" "$CASK_FILE"
+            # 4. Finalize File
+            # Replace the temporary :no_check with the actual new SHA
+            sed -i '' "s/sha256 :no_check/sha256 \"$NEW_SHA\"/" "$LOCAL_FILE"
+            
+            # Just in case the file had an old SHA instead of :no_check (safety net)
+            sed -i '' "s/sha256 \".*\"/sha256 \"$NEW_SHA\"/" "$LOCAL_FILE"
 
-            git add "$CASK_FILE"
+            # 5. Commit
+            git add "$LOCAL_FILE"
             git commit -m "Update $CASK_NAME to $LATEST_VERSION"
           done
 
-          git push
-
+          # ---------------------------------------------------------
+          # PUSH CHANGES
+          # ---------------------------------------------------------
+          # Only push if there are commits to push
+          if git log origin/HEAD..HEAD | grep -q .; then
+            echo "Pushing changes..."
+            git push
+          else
+            echo "No changes to push."
+          fi
