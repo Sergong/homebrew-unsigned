@@ -23,7 +23,6 @@ cask "inkscape" do
   end
 
   conflicts_with cask: "inkscape-preview"
-  depends_on macos: ">= 10.13"
 
   app "Inkscape.app"
   binary "#{appdir}/Inkscape.app/Contents/MacOS/inkscape"
