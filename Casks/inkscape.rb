@@ -4,7 +4,7 @@ cask "inkscape" do
   arch arm: "dmg-arm64", intel: "dmg"
 
   version "1.4"
-  sha256 "aa5cfb0647f1745f37f9f237501e17cddacf83ecbd4b569ab453f0c006e44708" # We skip the check initially; the automation will fill this in
+  sha256 "d040b0e36bfb39e37ac604446604554999d79c910178b323274d061c08ceb80b" # We skip the check initially; the automation will fill this in
 
   # 2. Use the STABLE redirect URL
   # Instead of guessing "Inkscape-1.4.dmg", we hit the download endpoint.
