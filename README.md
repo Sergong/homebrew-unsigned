@@ -1,4 +1,4 @@
-# How to use your this Tap
+# How to use this Tap
 Now that your repo is live and up-to-date, you can use it on your Mac to install these apps without the warning warnings:
 
 ## Add your tap:
